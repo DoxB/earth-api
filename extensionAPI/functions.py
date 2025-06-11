@@ -1,7 +1,8 @@
 import re
 from kiwipiepy import Kiwi
 from gensim.summarization.summarizer import summarize
-from youtube_transcript_api import YouTubeTranscriptApi
+import yt_dlp
+import requests
 
 class CustomTokenizer:
     def __init__(self):
@@ -15,8 +16,39 @@ class CustomTokenizer:
 class YoutubeScrape:
     def get_video_text(video_url):
         video_id = video_url.split('v=')[1][:11]
-        transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['ko'])
-        text_formatted = " ".join([line['text'] for line in transcript])
+        ydl_opts = {
+            'skip_download': True,
+            'writeautomaticsub': True,
+            'subtitleslangs': ['ko'],
+            'outtmpl': '%(id)s.%(ext)s'
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.cache.remove()
+            info = ydl.extract_info(f'https://www.youtube.com/watch?v={video_id}', download=False)
+            vtt_url = info.get('requested_subtitles')['ko']['url']
+            subtitle = requests.get(vtt_url).text
+
+            lines = []
+            for line in subtitle.split('\n'):
+                if line in lines:
+                    continue
+                if (
+                    line.strip() == ''
+                    or line.startswith('WEBVTT')
+                    or line.startswith('Kind:')
+                    or line.startswith('Language:')
+                    or re.match(r'\d\d:\d\d:\d\d\.\d+ -->', line)
+                ):
+                    continue
+                if re.match(r'\[.*\]', line.strip()):
+                    continue
+                clean = re.sub(r'<.*?>', '', line).strip()
+                if clean:
+                    lines.append(clean)
+
+            text_formatted = ' '.join(lines)
+
         return text_formatted
 
     def preprocessing(text):
