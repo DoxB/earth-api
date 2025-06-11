@@ -1,3 +1,5 @@
 .env
 .DS_store
 __pycache__/
+models/
+saved_temp/
