@@ -18,6 +18,7 @@ import ast
 import os
 from dotenv import load_dotenv
 import time
+from openai import OpenAI
 
 load_dotenv()
 
@@ -25,6 +26,9 @@ NEO4J_URL = os.environ.get('NEO4J_URL')
 NEO4J_PORT = os.environ.get('NEO4J_PORT')
 NEO4J_ID = os.environ.get('NEO4J_ID')
 NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
+ORGANIZATION_ID = ''
+PROJECT_ID = ''
 
 class CustomTokenizer:
     def __init__(self):
@@ -85,7 +89,7 @@ class YoutubeScrape:
         tfidf_sums = X.sum(axis=1)    # 문장별 TF-IDF 합계 (2D 행렬)
         tfidf_sums = np.array(tfidf_sums).flatten()
 
-        threshold = np.percentile(tfidf_sums, 30)
+        threshold = np.percentile(tfidf_sums, 70)
 
         filtered_sentences = [
             sent.replace('안녕하세요', '').replace('[음악]', '').replace(' 네', '').replace('네 ', '').strip() for sent, score in zip(sentences, tfidf_sums) if score > threshold
@@ -143,6 +147,102 @@ class TopicSelect:
         return keywords[:5] # 상위 5개 키워드만 반환
 
 class CausalClassify:
+    @staticmethod
+    def set_open_params(
+            model="gpt-4.1-nano",
+            temperature=0.2,
+            max_tokens=40,
+            top_p=1,
+            frequency_penalty=0,
+            presence_penalty=0,
+        ):
+        """ set openai parameters"""
+
+        openai_params = {}
+
+        openai_params['model'] = model
+        openai_params['temperature'] = temperature
+        openai_params['max_tokens'] = max_tokens
+        openai_params['top_p'] = top_p
+        openai_params['frequency_penalty'] = frequency_penalty
+        openai_params['presence_penalty'] = presence_penalty
+        return openai_params
+
+    # error, retry 추가
+    @staticmethod
+    def get_completion(params, system_message_content, user_prompt_content, verbose=False):
+        # GPT 문장 재구성
+        client = OpenAI(api_key= OPENAI_API_KEY,
+                        organization=ORGANIZATION_ID,
+                        project=PROJECT_ID
+                    )
+
+        messages = [
+                {"role": "system", "content": system_message_content}, # 시스템 메시지는 대화의 맥락과 모델의 전반적인 행동 방식을 설정하는 데 사용
+                {"role": "user", "content": user_prompt_content} ]
+
+        retry_count = 3
+        for i in range(0, retry_count):
+            while True:
+                try:
+
+                    response = client.chat.completions.create(
+                        model = params['model'],
+                        messages = messages,
+                        temperature = params['temperature'],
+                        max_tokens = params['max_tokens'],
+                        top_p = params['top_p'],
+                        frequency_penalty = params['frequency_penalty'],
+                        presence_penalty = params['presence_penalty'],
+                    )
+
+                    answer = response.choices[0].message.content
+                    return answer
+
+                except Exception as error:
+                    print(f"API Error: {error}")
+                    print(f"Retrying {i+1} time(s) in 4 seconds...")
+
+                    if i+1 == retry_count:
+                        return user_prompt_content, None, None
+                    time.sleep(4)
+                    continue
+    @staticmethod
+    def generate_preprocess_sentence(sentence):
+        # --- 제약 조건 포함 프롬프트 작성 ---
+        params = CausalClassify.set_open_params()
+
+        system_message_content = """
+        You are an expert at reprocessing incomplete Korean sentences into complete phrase.
+        You have to summarize incomplete Korean sentences while maintaining their meaning and make them into complete phrase.
+        """
+
+        prompt_text_with_constraints =  f"""
+        The tone should be similar to an economic report, analyst briefing, or business news article.
+        Also, create clean sentences, leaving only the essential sentence components such as nouns, verbs, and objects.
+        And write concisely and clearly, using only the words used in the given sentence.
+        Leave out opinions such as predictions, possibilities, and prospects, and leave only the actions the subject has done.
+
+        Example input:
+        트럼프 대통령이 현재 시간으로 오늘 상호 관세까지 발표한다고 예고하면서
+
+        Expected output:
+        트럼프 대통령 상호 관세 발표
+
+        The results should be printed in Korean.
+        And the maximum number of tokens is 10, so it should be summarized well here.
+        Do not necessarily use expressions that predict the possibility, and only clearly express actions that necessarily see the possibility.
+
+        input:
+        {sentence}
+
+        output:
+        """
+        model_output = CausalClassify.get_completion(params, system_message_content, prompt_text_with_constraints, verbose=True)
+
+        return model_output
+
+    @staticmethod
     def inference_sentence(script):
         # 스크립트 전처리
         script = re.sub('\n', ' ', script)
@@ -176,10 +276,15 @@ class SplitSentence:
         cs = split_sentences(sentences)
         result = cs.splited
         embeds = cs.embeds
+
+        result_list = []
+        for res in result:
+            result_list.append([CausalClassify.generate_preprocess_sentence(s) for s in res])
+
         emb_list = []
         for emb in embeds:
             emb_list.append([e.tolist() for e in emb])
-        return result, emb_list
+        return result_list, emb_list
 
 class UpdataNeo4j:
     def make_relation(split_result, emb_list):
@@ -247,7 +352,7 @@ class UpdataNeo4j:
                     topic_connect_q = '''
                         MATCH (b:Youtube {name: $name})
                         MATCH (a:Event {topics: $event_topics})
-                        CREATE (b)-[:connectedYoutube]->(a)
+                        CREATE (a)-[:connectedYoutube]->(b)
                     '''
                     session.run(topic_connect_q, name=node[0], event_topics=event_topics)
 

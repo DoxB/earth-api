@@ -82,6 +82,6 @@ class YoutubeScrape:
             context += sentences[idx].text + '\n'
 
         sum_list = summarize(context, ratio=0.5).split('\n')
-        summary_result = ' '.join(sum_list)
+        # summary_result = ' '.join(sum_list)
 
-        return summary_result
+        return sum_list

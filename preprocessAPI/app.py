@@ -28,7 +28,7 @@ def get_extension_info(request: EconomicNewsItem):
     general_node, general_rel = UpdataNeo4j.make_relation(general_split_result, general_emb_list)
 
     UpdataNeo4j.update_neo4j(causal_node, causal_rel, event_topics, "causal")
-    d = UpdataNeo4j.update_neo4j(general_node, general_rel, event_topics, "causal")
+    UpdataNeo4j.update_neo4j(general_node, general_rel, event_topics, "general")
     return {
                 # "event_topics": event_topics,
                 # "causal_sentences":causal_sentences,
