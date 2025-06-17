@@ -240,13 +240,6 @@ class ClauseSpliting:
         Returns:
             전체 절의 [CLS] 벡터 리스트 또는 None (저장 파일로 대체 가능)
         """
-        # def save_batch_npy(batch_result, save_dir, batch_idx):
-        #     os.makedirs(save_dir, exist_ok=True)
-        #     path = os.path.join(save_dir, f'embedding_batch_{batch_idx}.npy')
-        #     np.save(path, np.array(batch_result, dtype=object))
-
-        # with open(self.filenames.significant_json, "w", encoding="utf-8") as f:
-        #     pass  # 초기화
 
         all_result = [] if len(splited) < self.config.return_embed_max else None
         for batch_idx in range(0, len(splited), self.config.save_batch):
@@ -298,34 +291,9 @@ class ClauseSpliting:
                 highlighted.append(highlight_temp)
                 result.append(temp)
 
-            # for clauses, highlights in zip(batch, highlighted):
-            #     item = {"clause": clauses, "highlight": highlights}
-            #     with open(self.filenames.significant_json, "a", encoding="utf-8") as f:
-            #         f.write(json.dumps(item, ensure_ascii=False) + "\n")
-
-            # save_batch_npy(result, self.filenames.saved_temp_dir, batch_idx)
             if all_result is not None:
                 all_result.extend(result)
 
-
-        # def load_and_merge_npy(save_dir: str, output_path: str):
-        #     files = [f for f in os.listdir(save_dir) if f.startswith("embedding_batch_") and f.endswith(".npy")]
-        #     if not files:
-        #         raise FileNotFoundError("병합할 .npy 파일이 없습니다.")
-        #     files = sorted(files, key=lambda x: int(x.split('_')[-1].split('.')[0]))
-        #     if len(files) == 1:
-        #         src = os.path.join(save_dir, files[0])
-        #         dst = os.path.join(save_dir, output_path)
-        #         np.save(dst, np.load(src, allow_pickle=True))
-        #         return
-        #     merged = []
-        #     for file in files:
-        #         batch_path = os.path.join(save_dir, file)
-        #         data = np.load(batch_path, allow_pickle=True)
-        #         merged.extend(data)
-        #     np.save(output_path, np.array(merged, dtype=object))
-
-        # load_and_merge_npy(self.filenames.saved_temp_dir, self.filenames.embedding_np)
         return all_result
 
     def is_gram(self, word):
