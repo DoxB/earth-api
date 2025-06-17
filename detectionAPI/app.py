@@ -20,20 +20,38 @@ app.add_middleware(
 
 @app.get("/generate_hiding_relation")
 def generate_hiding_relation():
+    """
+    숨겨진 링크 및 관계 예측 API
+
+    Neo4j에서 추출된 최신 토픽 기반 서브그래프를 사용하여 RVGAE 모델로
+    관측되지 않은 노드 쌍 간의 관계를 예측하고, 고신뢰(high-confidence) 예측 결과를 반환합니다.
+
+    Returns:
+        List[dict]: 예측된 관계 리스트. 각 항목은 {
+            "source": str,      # 출발 노드 이름
+            "target": str,      # 도착 노드 이름
+            "rel_type": str     # 예측된 관계 타입 ("인과" 또는 "관계있음")
+        }
+    """
+    # 1. Neo4j에서 최신 주제 토픽에 해당하는 관계 데이터 추출
     node_dict, relations = SelectNeo4j.extract_topic_subgraph_indexed()
+
+    # 2. 노드 임베딩 및 관계 형태 변환
     emb_list = PreprocessDatasets.extract_embedding(node_dict)
     edge_list, labels = PreprocessDatasets.convert_relation(relations)
-    results = DetectHidedRelation.predict(emb_list, edge_list, labels)
-    filter_results = PreprocessDatasets.filter_direct(node_dict, results)
-    # UpdataNeo4j.update_pred_neo4j(filter_results)
-    print(filter_results)
 
+    # 3. 숨겨진 링크 예측 수행 (RVGAE)
+    results = DetectHidedRelation.predict(emb_list, edge_list, labels)
+
+    # 4. 예측된 관계 중 중복 제거 및 방향성 필터링
+    filter_results = PreprocessDatasets.filter_direct(node_dict, results)
+
+    # 5. JSON 응답 포맷 구성
     answer = []
-    for source, target, rel_type  in filter_results:
-        tmp = {}
-        tmp['source'] = source
-        tmp['target'] = target
-        tmp['rel_type'] = rel_type
-        answer.append(tmp)
-    # return {"result": len(filter_results), "node": len(emb_list), 'filter_results':filter_results}
+    for source, target, rel_type in filter_results:
+        answer.append({
+            "source": source,
+            "target": target,
+            "rel_type": rel_type
+        })
     return answer

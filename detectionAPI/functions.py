@@ -1,3 +1,16 @@
+"""
+RVGAE 기반 링크 예측 파이프라인 (with Neo4j)
+
+이 모듈은 Neo4j에서 관계형 노드 데이터를 추출하고, R-GCN 기반 VAE(RVGAE)를 활용하여
+숨겨진 링크 및 링크 타입을 예측한 후, 그 결과를 다시 Neo4j에 저장하는 전체 흐름을 담당합니다.
+
+구성 요소:
+- SelectNeo4j: 관계형 그래프 데이터를 Neo4j에서 추출하고 인덱스화
+- PreprocessDatasets: 모델 입력을 위한 전처리 (embedding/edge 변환)
+- DetectHidedRelation: RVGAE 모델 학습 및 숨은 링크 예측
+- UpdataNeo4j: 예측된 링크를 Neo4j에 반영
+"""
+
 import os
 from neo4j import GraphDatabase
 from dotenv import load_dotenv
@@ -17,12 +30,19 @@ NEO4J_ID = os.environ.get('NEO4J_ID')
 NEO4J_PASSWORD = os.environ.get('NEO4J_PASSWORD')
 
 class SelectNeo4j:
+    """
+    Neo4j로부터 주어진 토픽에 해당하는 Youtube 노드 간 관계를 추출하고,
+    노드 및 엣지를 RVGAE 입력 형식(인덱스 기반)으로 변환하는 클래스.
+    """
     @staticmethod
     def process_neo4j_to_indexed_format(query_results):
         """
-        Neo4j 쿼리 결과를 처리하여:
-        1. 노드들을 0번부터 인덱싱하여 딕셔너리로 저장
-        2. sup, r, sub 관계를 [sup_idx, rel_idx, sub_idx] 형태로 변환
+        Neo4j 쿼리 결과를 기반으로 노드와 관계 정보를 인덱스 기반 포맷으로 가공.
+        관계: [source_idx, rel_type_idx, target_idx]
+        노드: 0부터 부여된 custom_index와 함께 딕셔너리 반환
+
+        Returns:
+            Tuple[Dict[int, node_info], List[List[int]]]
         """
 
         # 노드와 관계 수집
@@ -99,7 +119,11 @@ class SelectNeo4j:
                                   username=NEO4J_ID,
                                   password=NEO4J_PASSWORD):
         """
-        Neo4j에서 최신 노드의 oriTopic 기반으로 관계를 추출하고 인덱스 형태로 변환
+        최신 노드의 oriTopic을 기준으로 해당 토픽 하위의 관계 서브그래프를 추출.
+
+        Returns:
+            node_dict (Dict): 인덱스 기반 노드 정보
+            relations (List): [src_idx, rel_type_idx, tgt_idx] 관계 리스트
         """
 
         query = """
@@ -123,13 +147,26 @@ class SelectNeo4j:
             driver.close()
 
 class PreprocessDatasets:
+    """
+    노드 및 관계 정보를 RVGAE 입력 형식으로 전처리하는 유틸리티 클래스.
+    """
     def extract_embedding(node_dict):
+        """
+        각 노드의 임베딩 벡터를 리스트로 추출
+        Returns: List[List[float]]
+        """
         emb_list = []
         for _, v in node_dict.items():
             emb_list.append(v['embedding'])
         return emb_list
 
     def convert_relation(relations):
+        """
+        [src, rel, tgt] 형태의 관계를 모델 입력용 edge_index, labels로 분해
+        Returns:
+            edge_index (List[List[int]]): [[src1, src2, ...], [tgt1, tgt2, ...]]
+            labels (List[int]): 각 엣지의 관계 타입 인덱스
+        """
         edge_list = []
         start = []
         end = []
@@ -146,6 +183,10 @@ class PreprocessDatasets:
         return edge_list, labels
 
     def filter_direct(node_dict, pred_list):
+        """
+        예측된 관계 중 양방향 중복을 제거하고, 점수가 높은 단방향만 유지.
+        Returns: List[[source_name, target_name, relation_type]]
+        """
         pred_rel = []
         for r in pred_list:
             if r[3] == 0:
@@ -174,8 +215,19 @@ class PreprocessDatasets:
 
 
 class DetectHidedRelation:
+    """
+    RVGAE 모델을 사용해 그래프의 잠재 표현을 학습하고,
+    관측되지 않은 노드 쌍 간 숨은 링크 및 관계 유형을 예측하는 클래스.
+    """
     def predict(emb_list, edge_list, labels, seed=42):
+        """
+        모델 학습 후, 전체 노드 쌍 중 기존 관계가 없는 쌍에 대해
+        링크 존재 여부 및 관계 유형을 예측.
 
+        Returns:
+            List[Tuple[int, int, float, int]]:
+                (src_idx, tgt_idx, 확률점수, 관계유형 인덱스)
+        """
         np.random.seed(seed)
         torch.manual_seed(seed)
         torch.cuda.manual_seed(seed)
@@ -263,7 +315,20 @@ class DetectHidedRelation:
         return results
 
 class UpdataNeo4j:
+    """
+    숨은 관계 예측 결과를 Neo4j에 다시 업데이트하는 유틸리티.
+    기존 노드 간에 관계가 없을 경우에만 새로운 관계를 생성함.
+    """
     def update_pred_neo4j(pred_list):
+        """
+        예측된 숨은 관계(pred_list)를 Neo4j에 삽입.
+        예측된 관계 유형에 따라 `isCauseOf_pred`, `isGeneralOf_pred`로 구분하여 생성.
+
+        Args:
+            pred_list (List[[source_name, target_name, relation_type]])
+        Returns:
+            str: "ok"
+        """
         url = f"{NEO4J_URL}:{NEO4J_PORT}"
         auth = (NEO4J_ID, NEO4J_PASSWORD)
 
