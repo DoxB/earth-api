@@ -257,7 +257,7 @@ class DetectHidedRelation:
                 pred_types = torch.argmax(type_pred, dim=1).cpu().numpy()
 
                 for (n1, n2), s, rel in zip(batch, scores, pred_types):
-                    if s >= 0.9955: # threshold
+                    if s >= 0.995: # threshold
                         results.append((int(n1), int(n2), float(s), int(rel)))  # only high-score predictions
 
         return results

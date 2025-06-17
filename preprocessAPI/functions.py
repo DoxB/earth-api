@@ -1,3 +1,23 @@
+"""
+경제 뉴스 자동 처리 파이프라인
+
+이 모듈은 다음과 같은 주요 기능을 포함합니다:
+- YouTube에서 자막 수집 및 전처리
+- 중요 문장 필터링 및 오타 수정
+- 키워드 추출 및 LDA 기반 토픽 분류
+- GPT 기반 인과 문장 추출 및 문장 재구성
+- 문장 임베딩 기반 관계 분석
+- Neo4j에 노드/관계 저장
+
+주요 클래스:
+- CustomTokenizer: 명사 기반 형태소 토크나이저
+- YoutubeScrape: 영상 자막 수집, 전처리 및 키워드 추출
+- TopicSelect: LDA 모델 기반 토픽 추출
+- CausalClassify: GPT 및 분류 모델을 통한 인과 문장 분류 및 재구성
+- SplitSentence: 문장 분리 및 임베딩 처리
+- UpdataNeo4j: 결과를 Neo4j 그래프 DB에 저장
+"""
+
 import re
 from kiwipiepy import Kiwi
 
@@ -31,6 +51,10 @@ ORGANIZATION_ID = ''
 PROJECT_ID = ''
 
 class CustomTokenizer:
+    """
+    Kiwi 기반 사용자 정의 토크나이저.
+    명사(NNG, NNP)만 추출하고, 길이가 2자 이상인 토큰만 유지함.
+    """
     def __init__(self):
         self.tagger = Kiwi()
 
@@ -40,8 +64,17 @@ class CustomTokenizer:
         return result
 
 class YoutubeScrape:
-    # yt-dlp 방식
+    """
+    YouTube 자막 수집 및 텍스트 전처리 유틸리티 클래스.
+    """
     def get_video_text(video_url):
+        """
+        주어진 YouTube URL에서 자동 자막을 다운로드하고 정제된 텍스트를 반환함.
+        Args:
+            video_url (str): YouTube 영상 URL
+        Returns:
+            str: 정제된 텍스트 자막
+        """
         video_id = video_url.split('v=')[1][:11]
 
         ydl_opts = {
@@ -80,6 +113,11 @@ class YoutubeScrape:
         return text_formatted
 
     def preprocessing(text):
+        """
+        입력 텍스트에 대해 문장 분리, TF-IDF 기반 중요도 필터링, 오타 제거 수행.
+        Returns:
+            str: 전처리된 문장
+        """
         text = re.sub('\n', ' ', text)
         sentences = [s for s in kss.split_sentences(text)]
         ### 중요도 낮은 문장 제거
@@ -115,12 +153,27 @@ class YoutubeScrape:
         return pre_text
 
     def extract_keywords(text):
+        """
+        전처리된 텍스트에서 명사 키워드만 추출함.
+        Returns:
+            List[str]: 주요 키워드 리스트
+        """
         tokenizer = CustomTokenizer()
         tokens = tokenizer(text)
         return tokens
 
 class TopicSelect:
+    """
+    Gensim LDA 모델을 사용한 토픽 분류 유틸리티.
+    """
     def select_topic(script):
+        """
+        LDA 모델로부터 주요 토픽을 예측하고, 제외 토픽을 걸러낸 후 대표 키워드 5개를 반환.
+        Args:
+            script (List[str]): 키워드 토큰 리스트
+        Returns:
+            List[str]: 대표 키워드 리스트
+        """
         except_topic_id = {11, 12, 18, 23, 28}
 
         common_dictionary = Dictionary.load("/home/regular/workspace/Earth/earth-api/preprocessAPI/models/topic/the_2293.id2word")
@@ -147,6 +200,10 @@ class TopicSelect:
         return keywords[:5] # 상위 5개 키워드만 반환
 
 class CausalClassify:
+    """
+    인과 문장 분류 및 요약을 수행하는 클래스.
+    GPT 기반 재구성 및 HuggingFace 분류 모델 사용.
+    """
     @staticmethod
     def set_open_params(
             model="gpt-4.1-nano",
@@ -156,7 +213,7 @@ class CausalClassify:
             frequency_penalty=0,
             presence_penalty=0,
         ):
-        """ set openai parameters"""
+        """ OpenAI API 호출을 위한 파라미터 세팅 """
 
         openai_params = {}
 
@@ -171,6 +228,9 @@ class CausalClassify:
     # error, retry 추가
     @staticmethod
     def get_completion(params, system_message_content, user_prompt_content, verbose=False):
+        """
+        OpenAI GPT API 호출 로직. 오류 발생 시 재시도 수행.
+        """
         # GPT 문장 재구성
         client = OpenAI(api_key= OPENAI_API_KEY,
                         organization=ORGANIZATION_ID,
@@ -209,6 +269,10 @@ class CausalClassify:
                     continue
     @staticmethod
     def generate_preprocess_sentence(sentence):
+        """
+        문장을 핵심 명사/동사로 요약하여 10토큰 이내로 간결하게 재구성.
+        GPT 모델 기반 요약 프롬프트 활용.
+        """
         # --- 제약 조건 포함 프롬프트 작성 ---
         params = CausalClassify.set_open_params()
 
@@ -244,6 +308,11 @@ class CausalClassify:
 
     @staticmethod
     def inference_sentence(script):
+        """
+        전체 스크립트를 문장 단위로 분리하고, 인과 문장만 필터링.
+        Returns:
+            Tuple[List[str], List[str]]: (인과 문장, 일반 문장)
+        """
         # 스크립트 전처리
         script = re.sub('\n', ' ', script)
         sentences = [s for s in kss.split_sentences(script)]
@@ -272,7 +341,15 @@ class CausalClassify:
         return causal_sentences, general_sentencse
 
 class SplitSentence:
+    """
+    문장 집합에 대해 CausalClassify 기반 재처리 수행 및 임베딩 추출.
+    """
     def result_split(sentences):
+        """
+        문장을 그룹 단위로 분할하고, 각 문장에 대해 재요약 및 임베딩 생성.
+        Returns:
+            Tuple[List[List[str]], List[List[List[float]]]]: (분할 문장, 임베딩 리스트)
+        """
         cs = split_sentences(sentences)
         result = cs.splited
         embeds = cs.embeds
@@ -287,7 +364,15 @@ class SplitSentence:
         return result_list, emb_list
 
 class UpdataNeo4j:
+    """
+    분리된 문장 및 관계를 Neo4j에 저장하는 유틸리티 클래스.
+    """
     def make_relation(split_result, emb_list):
+        """
+        인접 문장 간 관계 리스트 및 노드 리스트 생성.
+        Returns:
+            Tuple[List[Tuple[str, List[float]]], List[Tuple[str, str]]]
+        """
         node_result = []
         rel_result = []
         for t_idx in range(len(split_result)):
@@ -302,6 +387,16 @@ class UpdataNeo4j:
         return node_result, rel_result
 
     def update_neo4j(nodes, relations, event_topics, rel_type):
+        """
+        노드/관계 생성 및 이벤트 연결 관계까지 포함한 Neo4j 그래프 업데이트 수행.
+        Args:
+            nodes: 문장 및 임베딩
+            relations: 문장 간 관계
+            event_topics: 연결된 주제
+            rel_type: 관계 유형 (causal 또는 general)
+        Returns:
+            str: "ok" (성공 시)
+        """
         url = f"{NEO4J_URL}:{NEO4J_PORT}"
         auth = (NEO4J_ID, NEO4J_PASSWORD)
 
